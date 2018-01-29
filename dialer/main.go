@@ -11,87 +11,46 @@ import (
 	"io"
 )
 
-type AppData struct {
+type AppConfig struct {
 	Path string `json:"path"`
 	Key  string `json:"key"`
 	Uri  string `json:"uri"`
 	Port int `json:"port"`
 }
 
+type AppState struct {
+	changed bool
+}
+
 type DialsData map[string]interface{}
 
 const FIELD_NAME = "smp"
 
-var appData AppData
+var appConfig AppConfig
+var appState AppState
 
 func main() {
-
-	getAppData()
-	miniServe()
+	getAppConfig()
+	miniServer()
 }
 
-func handleGet(w http.ResponseWriter, r *http.Request) {
+func getAppConfig() {
 
-	log.Println("Handling GET")
-	dialValue := getDialValue()
-	html := getHtml(dialValue)
-	io.WriteString(w, html)
-}
+	configPath := flag.String("config", "./config.json", "defines path for config.json")
+	flag.Parse()
 
-func handlePost(w http.ResponseWriter, r *http.Request) {
-
-	log.Println("Handling POST")
-	dialValue := getDialValue()
-	r.ParseForm()
-	newDialValue := r.FormValue(FIELD_NAME)
-
-	log.Printf("Received value: %v\n", newDialValue)
-
-	if dialValue != newDialValue {
-		writeOut(newDialValue)
-	}
-	http.Redirect(w, r, appData.Uri, 301)
-}
-
-func writeOut(dialValue string) {
-
-	dialsData, err := getDialsData()
+	raw, err := ioutil.ReadFile(*configPath);
 
 	if err != nil {
-		log.Fatal("getDialsData: ", err)
+		log.Fatal("ReadFile failed with error: ", err)
 	}
 
-	dialsData[appData.Key] = dialValue
-
-	raw, err := json.Marshal(dialsData)
-
-	if err != nil {
-		log.Fatal("Cannot parse JSON: ", err)
-	}
-
-	log.Printf("Writing: %v\n", stringify(raw))
-	ioutil.WriteFile(appData.Path, raw, 0666)
+	json.Unmarshal(raw, &appConfig)
 }
 
-func getDialValue() string {
+func miniServer() {
 
-	dialsData, err := getDialsData()
-
-	if err != nil {
-		log.Fatal("getDialsData: ", err)
-	}
-
-	if val, ok := dialsData[appData.Key]; ok {
-
-		return val.(string)
-	}
-
-	panic(fmt.Sprintf("%v does not contain key %v", appData.Path, appData.Key))
-}
-
-func miniServe() {
-
-	http.HandleFunc(appData.Uri, func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(appConfig.Uri, func(w http.ResponseWriter, r *http.Request) {
 
 		switch r.Method {
 
@@ -100,48 +59,96 @@ func miniServe() {
 		case "GET":
 			handleGet(w, r)
 		default:
-			panic(fmt.Sprintf("Cannot handle %v requests!", r.Method))
+			log.Fatalf("Cannot handle %v requests!", r.Method)
 		}
 	})
 
-	err := http.ListenAndServe(fmt.Sprintf(":%v", appData.Port), nil)
+	err := http.ListenAndServe(fmt.Sprintf(":%v", appConfig.Port), nil)
+
 	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
+		log.Fatal("ListenAndServe failed with error: ", err)
 	}
 }
 
-func getDialsData() (DialsData, error) {
+func handleGet(w http.ResponseWriter, r *http.Request) {
 
-	var dialsData DialsData
-	var data interface{}
+	log.Println("Handling GET request")
+	
+	dialValue := getDialValue()
+	
+	html := getHtml(dialValue)
+	
+	io.WriteString(w, html)
 
-	raw, err := ioutil.ReadFile(appData.Path);
+	appState.changed = false
+}
+
+func handlePost(w http.ResponseWriter, r *http.Request) {
+
+	log.Println("Handling POST request")
+	
+	dialValue := getDialValue()
+	
+	r.ParseForm()
+	
+	newDialValue := r.FormValue(FIELD_NAME)
+
+	log.Printf("Received value: %v\n", newDialValue)
+
+	if dialValue != newDialValue {
+		writeOut(newDialValue)
+		appState.changed = true
+	}
+	
+	http.Redirect(w, r, appConfig.Uri, 301)
+}
+
+func writeOut(dialValue string) {
+
+	dialsData := getDialsData()
+
+	dialsData[appConfig.Key] = dialValue
+
+	raw, err := json.Marshal(dialsData)
 
 	if err != nil {
-		return dialsData, err
+		log.Fatal("Cannot parse JSON: ", err)
+	}
+
+	log.Printf("Writing: %v\n", stringify(raw))
+	
+	ioutil.WriteFile(appConfig.Path, raw, 0666)
+}
+
+func getDialValue() string {
+
+	dialsData := getDialsData()
+
+	if value, found := dialsData[appConfig.Key]; found {
+
+		return value.(string)
+	}
+
+	log.Fatalf("%v does not contain key %v", appConfig.Path, appConfig.Key)
+
+	return ""
+}
+
+func getDialsData() (DialsData) {
+
+	var data interface{}
+
+	raw, err := ioutil.ReadFile(appConfig.Path);
+
+	if err != nil {
+		log.Fatal("ReadFile failed with error: ", err)
 	}
 
 	json.Unmarshal(raw, &data)
 
 	log.Printf("Read: %v\n", stringify(raw))
 
-	dialsData = DialsData(data.(map[string]interface{}))
-
-	return dialsData, nil
-}
-
-func getAppData() {
-
-	configPath := flag.String("config", "./config.json", "defines path for config.json")
-	flag.Parse()
-
-	raw, err := ioutil.ReadFile(*configPath);
-
-	if err != nil {
-		log.Fatal("getDialsData: ", err)
-	}
-
-	json.Unmarshal(raw, &appData)
+	return DialsData(data.(map[string]interface{}))
 }
 
 func stringify(raw []byte) string {
@@ -158,8 +165,7 @@ func getHtml(dialValue string) string {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css">
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.0/jquery.min.js"></script>
-    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"></script>
+    <link href="data:image/x-icon;base64,{icon}" rel="icon" type="image/x-icon">
 </head>
 <body>
 
@@ -175,28 +181,27 @@ func getHtml(dialValue string) string {
             <label><input type="radio" name="{field}" {disabled} value="disabled">Disabled</label>
         </div>
         <button type="submit" class="btn btn-default">Submit</button>
-
-        <div class="seconds-txt" style="margin-top:32px;">
-               0 seconds
-        </div>
+        {changed}
     </form>
 </div>
 <script>
-function run() {
-  var progressContainer = document.getElementsByClassName('seconds-txt')[0];
-  var seconds = 0;
-  var timer = setInterval(frame, 1000);
-  function frame() {
-    seconds++;
-    if (seconds > 60) {
-      progressContainer.style.visibility = "hidden";
-      clearInterval(timer);
-    } else {
-      progressContainer.textContent = seconds + ' seconds';
+    function run() {
+        var secondsDiv = document.getElementById('seconds-txt');
+        if (secondsDiv) {
+            var seconds = 0;
+            var timer = setInterval(frame, 1000);
+            function frame() {
+                seconds++;
+                if (seconds > 60) {
+                    secondsDiv.style.visibility = "hidden";
+                    clearInterval(timer);
+                } else {
+                    secondsDiv.textContent = seconds + ' seconds';
+                }
+            }
+        }
     }
-  }
-}
-run();
+    run();
 </script>
 
 </body>
@@ -205,7 +210,9 @@ run();
 	enabled, disabled := getChecked(dialValue)
 
 	replacements := map[string]string{
-		"{uri}": appData.Uri,
+		"{changed}": getSecondsDiv(),
+		"{icon}": getBase64Icon(),
+		"{uri}": appConfig.Uri,
 		"{enabled}": enabled,
 		"{disabled}": disabled,
 		"{value}": dialValue,
@@ -219,7 +226,6 @@ run();
 	return html
 }
 
-
 func getChecked(value string) (string, string) {
 
 	checked, unchecked := `checked="checked"`, ""
@@ -229,4 +235,24 @@ func getChecked(value string) (string, string) {
 	}
 
 	return unchecked, checked
+}
+
+// using an in-line icon prevents an additional browser favicon request for every GET //
+
+func getBase64Icon() string {
+	return `iVBORw0KGgoAAAANSUhEUgAAABgAAAAeCAYAAAA2Lt7lAAAAOklEQVRIS
+	+3SMQoAAAjDQPv/R9cnZHIyzgHhaNp2Di8+IF2JSGgkkggFMHBFEqEABq5IIhTAwB
+	U9IFq9Cnen3UNVJgAAAABJRU5ErkJggg==`
+}
+
+
+//insert a timer if the data was changed in the last call
+
+func getSecondsDiv() string {
+
+	if appState.changed {
+		return `<div id="seconds-txt" style="margin-top:32px;">0 seconds</div>`
+	}
+
+	return ""
 }
