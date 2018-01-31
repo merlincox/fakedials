@@ -9,6 +9,8 @@ import (
 	"io/ioutil"
 	"encoding/json"
 	"io"
+	"time"
+	"strconv"
 )
 
 type AppConfig struct {
@@ -19,12 +21,14 @@ type AppConfig struct {
 }
 
 type AppState struct {
-	changed bool
+	changed  bool
+	decisecs int
 }
 
 type DialsData map[string]interface{}
 
 const FIELD_NAME = "smp"
+const REFRESH_SECS = 60
 
 var appConfig AppConfig
 var appState AppState
@@ -79,8 +83,6 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 	html := getHtml(dialValue)
 	
 	io.WriteString(w, html)
-
-	appState.changed = false
 }
 
 func handlePost(w http.ResponseWriter, r *http.Request) {
@@ -97,10 +99,26 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 
 	if dialValue != newDialValue {
 		writeOut(newDialValue)
-		appState.changed = true
+		tickTime()
 	}
 	
 	http.Redirect(w, r, appConfig.Uri, 301)
+}
+
+//ticks for 60 seconds representing Mozart dials refresh interval
+func tickTime() {
+	appState.changed = true
+	appState.decisecs = REFRESH_SECS * 10
+	ticker := time.NewTicker(time.Millisecond * 100)
+	go func() {
+		for range ticker.C {
+			appState.decisecs--
+			if appState.decisecs <= 0 {
+				ticker.Stop()
+				appState.changed = false
+			}
+		}
+	}()
 }
 
 func writeOut(dialValue string) {
@@ -185,23 +203,30 @@ func getHtml(dialValue string) string {
     </form>
 </div>
 <script>
-    function run() {
-        var secondsDiv = document.getElementById('seconds-txt');
-        if (secondsDiv) {
-            var seconds = 0;
-            var timer = setInterval(frame, 1000);
-            function frame() {
-                seconds++;
-                if (seconds > 60) {
-                    secondsDiv.style.visibility = "hidden";
-                    clearInterval(timer);
-                } else {
-                    secondsDiv.textContent = seconds + ' seconds';
+    "option strict"
+    var timerDiv = document.getElementById('dials-timer');
+    if (timerDiv) {
+
+        var original = {decisecs} * 100;
+        var start = Date.now();
+        var secs = Math.floor(original/1000);
+        var ticker = setInterval(frame, 100);
+
+        function frame() {
+
+            var remaining = original + start - Date.now();
+            if (remaining <= 0) {
+                clearInterval(ticker);
+                timerDiv.parentNode.removeChild(timerDiv);
+            } else {
+                var newSecs = Math.floor(remaining/1000)
+                if (newSecs !== secs) {
+                    secs = newSecs
+                    timerDiv.textContent = secs + ' seconds';
                 }
             }
         }
     }
-    run();
 </script>
 
 </body>
@@ -210,6 +235,7 @@ func getHtml(dialValue string) string {
 	enabled, disabled := getChecked(dialValue)
 
 	replacements := map[string]string{
+		"{decisecs}": strconv.Itoa(appState.decisecs),
 		"{changed}": getSecondsDiv(),
 		"{icon}": getBase64Icon(),
 		"{uri}": appConfig.Uri,
@@ -246,12 +272,12 @@ func getBase64Icon() string {
 }
 
 
-//insert a timer if the data was changed in the last call
+//insert a timer into the HTML if the data was changed within
 
 func getSecondsDiv() string {
 
 	if appState.changed {
-		return `<div id="seconds-txt" style="margin-top:32px;">0 seconds</div>`
+		return fmt.Sprintf(`<div id="dials-timer" style="margin-top:32px;">%v seconds</div>`, (appState.decisecs / 10))
 	}
 
 	return ""
