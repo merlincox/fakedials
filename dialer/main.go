@@ -60,16 +60,29 @@ func miniServer() {
 
 	http.HandleFunc(app.props.Uri, func(w http.ResponseWriter, r *http.Request) {
 
+		if r.URL.Path != app.props.Uri {
+
+			log.Printf("Request for %v not found\n", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+
 		switch r.Method {
 
 		case "POST":
 			handlePost(w, r)
-		case "GET":
-			handleGet(w, r)
+
+		case "GET", "HEAD":
+			handleGetOrHead(w, r)
+
 		default:
-			log.Fatalf("Cannot handle %v requests!", r.Method)
+			errorMsg := fmt.Sprintf("%v HTTP method %v not allowed", http.StatusMethodNotAllowed, r.Method)
+			log.Println(errorMsg)
+			http.Error(w, errorMsg, http.StatusMethodNotAllowed)
 		}
 	})
+
+	log.Println("Listening..")
 
 	err := http.ListenAndServe(fmt.Sprintf(":%v", app.props.Port), nil)
 
@@ -78,22 +91,23 @@ func miniServer() {
 	}
 }
 
-func handleGet(w http.ResponseWriter, r *http.Request) {
+func handleGetOrHead(w http.ResponseWriter, r *http.Request) {
 
-	log.Println("Handling GET request")
-	
-	dialValue := getDialValue()
-	
-	html := getHtml(dialValue)
-	
-	io.WriteString(w, html)
+	log.Printf("Handling %v request\n", r.Method)
+
+	dialsData := getDialsData()
+
+	// NB the library correctly handles HEAD requests by using the body to calculate Content-Length
+	// without actually transmitting it
+
+	io.WriteString(w, getHtml(dialsData[app.props.Key].(string)))
 }
 
 func handlePost(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Handling POST request")
 	
-	dialValue := getDialValue()
+	dialsData := getDialsData()
 	
 	r.ParseForm()
 	
@@ -101,15 +115,16 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received value: %v\n", newDialValue)
 
-	if dialValue != newDialValue {
-		writeOut(newDialValue)
+	if dialsData[app.props.Key] != newDialValue {
+		writeOut(newDialValue, dialsData)
 		tickTime()
 	}
 	
-	http.Redirect(w, r, app.props.Uri, 301)
+	http.Redirect(w, r, app.props.Uri, http.StatusSeeOther)
 }
 
-//ticks for 60 seconds representing Mozart dials refresh interval
+// Runs for 60 seconds representing Mozart Controller Dials refresh interval
+
 func tickTime() {
 	app.state.changed = true
 	app.state.decisecs = REFRESH_SECS * 10
@@ -125,9 +140,7 @@ func tickTime() {
 	}()
 }
 
-func writeOut(dialValue string) {
-
-	dialsData := getDialsData()
+func writeOut(dialValue string, dialsData DialsData) {
 
 	dialsData[app.props.Key] = dialValue
 
@@ -140,20 +153,6 @@ func writeOut(dialValue string) {
 	log.Printf("Writing: %v\n", stringify(raw))
 	
 	ioutil.WriteFile(app.props.Path, raw, 0666)
-}
-
-func getDialValue() string {
-
-	dialsData := getDialsData()
-
-	if value, found := dialsData[app.props.Key]; found {
-
-		return value.(string)
-	}
-
-	log.Fatalf("%v does not contain key %v", app.props.Path, app.props.Key)
-
-	return ""
 }
 
 func getDialsData() (DialsData) {
@@ -170,7 +169,21 @@ func getDialsData() (DialsData) {
 
 	log.Printf("Read: %v\n", stringify(raw))
 
-	return DialsData(data.(map[string]interface{}))
+	dialsData := DialsData(data.(map[string]interface{}))
+
+	value, found := dialsData[app.props.Key]
+
+	if !found {
+
+		log.Fatalf("%v does not contain key %v\n", app.props.Path, app.props.Key)
+	}
+
+	if _, isAString := value.(string); !isAString {
+		log.Fatalf("value for key %v in %v is not a string\n", app.props.Key, app.props.Path)
+
+	}
+
+	return dialsData
 }
 
 func stringify(raw []byte) string {
