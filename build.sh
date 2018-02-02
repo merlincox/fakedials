@@ -1,9 +1,23 @@
 #!/bin/bash
 
-TEMP_DIR=$(mktemp -d)
-SOURCE_DIR=$(dirname $0)
-TARGET_DIR=/usr/local/bin
+if [ -z "$GOPATH" ]
+then echo GOPATH is not defined >&2
+     exit 1
+fi
 
-go build -o $TEMP_DIR/dialer $SOURCE_DIR/dialer/main.go
-sudo mv -f $TEMP_DIR/dialer $TARGET_DIR
-sudo chmod +x $TARGET_DIR/dialer
+target_dir=$GOPATH/bin
+
+if [ ! -d $target_dir ]
+then echo GOPATH/bin is not present >&2
+     exit 2
+fi
+
+if [ ! -w $target_dir ]
+then echo GOPATH/bin is not writable >&2
+     exit 3
+fi
+
+source_dir=$(dirname $0)
+
+go build -o $target_dir/dialer $source_dir/dialer/main.go
+chmod +x $target_dir/dialer

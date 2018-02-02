@@ -288,8 +288,7 @@ func getBase64Icon() string {
 	U9IFq9Cnen3UNVJgAAAABJRU5ErkJggg==`
 }
 
-
-//insert a timer into the HTML if the data was changed within
+//insert a timer into the HTML if the data was changed within REFRESH_SECS
 
 func getSecondsDiv() string {
 
