@@ -3,14 +3,12 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"log"
 	"flag"
 	"io/ioutil"
 	"encoding/json"
-	"io"
 	"time"
-	"strconv"
+	"html/template"
 )
 
 type Props struct {
@@ -28,9 +26,21 @@ type State struct {
 type App struct {
 	state State
 	props Props
+	tmpl *template.Template
 }
 
 type DialsData map[string]interface{}
+
+type PageData struct {
+	Icon string
+	Enabled bool
+	Decisecs int
+	Seconds int
+	Changed bool
+	Field string
+	Value string
+	Uri string
+}
 
 const FIELD_NAME = "smp"
 const REFRESH_SECS = 60
@@ -38,7 +48,9 @@ const REFRESH_SECS = 60
 var app App
 
 func main() {
+
 	getProps()
+	app.tmpl = buildTemplate()
 	miniServer()
 }
 
@@ -100,7 +112,7 @@ func handleGetOrHead(w http.ResponseWriter, r *http.Request) {
 	// NB the library correctly handles HEAD requests by using the body to calculate Content-Length
 	// without actually transmitting it
 
-	io.WriteString(w, getHtml(dialsData[app.props.Key].(string)))
+	renderHtml(w, dialsData[app.props.Key].(string))
 }
 
 func handlePost(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +202,31 @@ func stringify(raw []byte) string {
 	return string(raw[:])
 }
 
-func getHtml(dialValue string) string {
+func renderHtml(w http.ResponseWriter, dialValue string) {
+
+	pageData := PageData{
+		Icon: getBase64Icon(),
+		Enabled: dialValue == "enabled",
+		Decisecs: app.state.decisecs,
+		Seconds: roundedDiv(app.state.decisecs, 10),
+		Changed: app.state.changed,
+		Field: FIELD_NAME,
+		Value: dialValue,
+		Uri: app.props.Uri,
+	}
+
+	app.tmpl.Execute(w, pageData)
+}
+
+func roundedDiv(n, m int) int {
+	retval := n / m
+	if (n % m) * 2 >= m {
+		retval++
+	}
+	return retval
+}
+
+func buildTemplate() *template.Template {
 
 	html := `
 <!DOCTYPE html>
@@ -200,33 +236,40 @@ func getHtml(dialValue string) string {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
-    <link href="data:image/x-icon;base64,{icon}" rel="icon" type="image/x-icon">
+    <link href="data:image/x-icon;base64,{{.Icon}}" rel="icon" type="image/x-icon">
 </head>
 <body>
 
 <div class="container mx-auto p-5 mt-5 w-25 border border-primary rounded bg-light">
     <h3>Dials Simulator</h3>
-    <p>SMP status is {value}</p>
-
-    <form method="POST" action="{uri}">
+    <p>SMP status is {{.Value}}</p>
+    <form method="POST" action="{{.Uri}}">
         <div class="form-check">
-            <label><input class="form-check-input" type="radio" name="{field}" {enabled} value="enabled">Enabled</label>
+            <label><input class="form-check-input" type="radio" name="{{.Field}}"
+            {{if .Enabled}} checked="checked" {{end}}
+            value="enabled">Enabled</label>
         </div>
         <div class="form-check">
-            <label><input class="form-check-input" type="radio" name="{field}" {disabled} value="disabled">Disabled</label>
+            <label><input class="form-check-input" type="radio" name="{{.Field}}"
+            {{if .Enabled}} {{else}} checked="checked" {{end}}
+            value="disabled">Disabled</label>
         </div>
         <button type="submit" class="btn btn-default">Submit</button>
     </form>
-    <div class="mt-3" style="min-height: 24px">{changed}</div>
+    <div class="mt-3" style="min-height: 24px">
+        {{if .Changed}}
+            <div id="dials-timer">{{ .Seconds}} seconds</div>
+        {{end}}
+    </div>
 </div>
 <script>
     "option strict"
     var timerDiv = document.getElementById('dials-timer');
     if (timerDiv) {
 
-        var original = {decisecs} * 100;
+        var original = {{.Decisecs}} * 100;
         var start = Date.now();
-        var secs = Math.floor(original/1000);
+        var secs = Math.round(original/1000);
         var ticker = setInterval(frame, 100);
 
         function frame() {
@@ -236,7 +279,7 @@ func getHtml(dialValue string) string {
                 clearInterval(ticker);
                 timerDiv.parentNode.removeChild(timerDiv);
             } else {
-                var newSecs = Math.floor(remaining/1000)
+                var newSecs = Math.round(remaining/1000)
                 if (newSecs !== secs) {
                     secs = newSecs
                     timerDiv.textContent = secs + ' seconds';
@@ -244,40 +287,18 @@ func getHtml(dialValue string) string {
             }
         }
     }
-</script>
 
+</script>
 </body>
 </html>
 `
-	enabled, disabled := renderChecked(dialValue)
+	tmpl, err := template.New("fake-dials").Parse(html)
 
-	replacements := map[string]string{
-		"{decisecs}": strconv.Itoa(app.state.decisecs),
-		"{changed}": getSecondsDiv(),
-		"{icon}": getBase64Icon(),
-		"{uri}": app.props.Uri,
-		"{enabled}": enabled,
-		"{disabled}": disabled,
-		"{value}": dialValue,
-		"{field}": FIELD_NAME,
+	if err != nil {
+		log.Fatalf("Unable to parse template with error: ", err)
 	}
 
-	for key, value := range replacements {
-		html = strings.Replace(html, key, value, -1)
-	}
-
-	return html
-}
-
-func renderChecked(value string) (string, string) {
-
-	checked, unchecked := `checked="checked"`, ""
-
-	if value == "enabled" {
-		return checked, unchecked
-	}
-
-	return unchecked, checked
+	return tmpl
 }
 
 // using an in-line icon prevents an additional browser favicon request for every GET //
@@ -286,18 +307,4 @@ func getBase64Icon() string {
 	return `iVBORw0KGgoAAAANSUhEUgAAABgAAAAeCAYAAAA2Lt7lAAAAOklEQVRIS
 	+3SMQoAAAjDQPv/R9cnZHIyzgHhaNp2Di8+IF2JSGgkkggFMHBFEqEABq5IIhTAwB
 	U9IFq9Cnen3UNVJgAAAABJRU5ErkJggg==`
-}
-
-//insert a timer into the HTML if the data was changed within REFRESH_SECS
-
-func getSecondsDiv() string {
-
-	if app.state.changed {
-		return fmt.Sprintf(
-			`<div id="dials-timer">%v seconds</div>`,
-			(app.state.decisecs / 10),
-		)
-	}
-
-	return ""
 }
